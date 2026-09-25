@@ -174,9 +174,9 @@
 
     function hdrToningCurve(curve) {
         curve = curve || {};
-        var y1 = int(64 + Number(curve.shadows || 0), 64, 1, 125);
-        var y2 = int(128 + Number(curve.midtones || 0), 128, y1 + 1, 190);
-        var y3 = int(192 + Number(curve.highlights || 0), 192, y2 + 1, 254);
+        var y1 = integer(64 + Number(curve.shadows || 0), 64, 1, 125);
+        var y2 = integer(128 + Number(curve.midtones || 0), 128, y1 + 1, 190);
+        var y3 = integer(192 + Number(curve.highlights || 0), 192, y2 + 1, 254);
         var points = [0, 0, 64, y1, 128, y2, 192, y3, 255, 255];
         var curveDesc = new ActionDescriptor();
         curveDesc.putString(stringIDToTypeID("name"), "HDR Photorealistic");
