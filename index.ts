@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
+import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -33,8 +33,8 @@ const EDIT_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
-    temperature: number(2000, 50000, "Camera Raw color temperature in kelvin."),
-    tint: number(-150, 150, "Camera Raw green/magenta tint."),
+    temperature: number(-100, 100, "Camera Raw Filter relative color-temperature adjustment."),
+    tint: number(-100, 100, "Camera Raw Filter relative green/magenta tint."),
     exposure: number(-5, 5, "Exposure in stops. Keep realistic edits near zero."),
     contrast: number(-100, 100, "Light panel contrast."),
     highlights: number(-100, 100, "Light panel highlights."),
@@ -59,6 +59,47 @@ const EDIT_SCHEMA = {
         ),
       ),
     },
+    curve: {
+      type: "object",
+      additionalProperties: false,
+      description: "Camera Raw point-curve offsets. Keep the curve restrained and monotonic for a natural HDR result.",
+      properties: {
+        shadows: number(-40, 40, "Output offset near input 64."),
+        midtones: number(-40, 40, "Output offset near input 128."),
+        highlights: number(-40, 40, "Output offset near input 192."),
+      },
+      required: ["shadows", "midtones", "highlights"],
+    },
+    colorGrading: {
+      type: "object",
+      additionalProperties: false,
+      description: "Subtle Camera Raw color grading. Saturation should usually stay low for photorealism.",
+      properties: {
+        shadowHue: number(0, 360, "Shadow hue in degrees."),
+        shadowSaturation: number(0, 100, "Shadow grading saturation."),
+        midtoneHue: number(0, 360, "Midtone hue in degrees."),
+        midtoneSaturation: number(0, 100, "Midtone grading saturation."),
+        highlightHue: number(0, 360, "Highlight hue in degrees."),
+        highlightSaturation: number(0, 100, "Highlight grading saturation."),
+        blending: number(0, 100, "Color grading blend amount."),
+        balance: number(-100, 100, "Balance between shadows and highlights."),
+      },
+      required: ["shadowHue", "shadowSaturation", "midtoneHue", "midtoneSaturation", "highlightHue", "highlightSaturation", "blending", "balance"],
+    },
+    detail: {
+      type: "object",
+      additionalProperties: false,
+      description: "Camera Raw Detail panel settings. Avoid halos, waxy denoising, and oversharpening.",
+      properties: {
+        sharpening: number(0, 150, "Sharpening amount."),
+        radius: number(0.5, 3, "Sharpening radius."),
+        detail: number(0, 100, "Sharpening detail."),
+        masking: number(0, 100, "Sharpening masking."),
+        luminanceNoiseReduction: number(0, 100, "Luminance noise reduction."),
+        colorNoiseReduction: number(0, 100, "Color noise reduction."),
+      },
+      required: ["sharpening", "radius", "detail", "masking", "luminanceNoiseReduction", "colorNoiseReduction"],
+    },
     straightenDegrees: number(-45, 45, "Clockwise rotation needed to straighten the image."),
     orientation: {
       type: "string",
@@ -73,15 +114,21 @@ const EDIT_SCHEMA = {
       additionalProperties: false,
       description: "Subtle photorealistic finishing applied to the open Photoshop document after crop and before PSD/JPEG saves. Correct only residual issues left after Camera Raw; use neutral values when no further correction is needed.",
       properties: {
-        exposure: number(-2, 2, "Residual Photoshop exposure correction in stops. Keep close to zero."),
-        brightness: number(-50, 50, "Residual Photoshop brightness correction."),
-        contrast: number(-50, 50, "Residual Photoshop contrast correction."),
-        toneGamma: number(0.5, 1.5, "Photoshop Levels midtone gamma. Use 1 for neutral; below 1 brightens midtones and above 1 darkens them."),
-        cyanRed: number(-30, 30, "Midtone color balance: negative adds cyan, positive adds red."),
-        magentaGreen: number(-30, 30, "Midtone color balance: negative adds magenta, positive adds green."),
-        yellowBlue: number(-30, 30, "Midtone color balance: negative adds yellow, positive adds blue."),
+        brightness: number(-50, 50, "Brightness/Contrast brightness correction."),
+        contrast: number(-50, 50, "Brightness/Contrast contrast correction."),
+        levelsBlack: number(0, 40, "Levels black input point."),
+        levelsWhite: number(215, 255, "Levels white input point."),
+        levelsGamma: number(0.5, 1.5, "Levels midtone gamma; 1 is neutral."),
+        curveShadows: number(-30, 30, "Curves output offset near input 64."),
+        curveMidtones: number(-30, 30, "Curves output offset near input 128."),
+        curveHighlights: number(-30, 30, "Curves output offset near input 192."),
+        exposure: number(-2, 2, "Exposure correction in stops. Keep close to zero."),
+        vibrance: number(-50, 50, "Vibrance adjustment."),
+        saturation: number(-30, 30, "Hue/Saturation saturation adjustment."),
+        hue: number(-20, 20, "Hue/Saturation hue adjustment."),
+        lightness: number(-20, 20, "Hue/Saturation lightness adjustment."),
       },
-      required: ["exposure", "brightness", "contrast", "toneGamma", "cyanRed", "magentaGreen", "yellowBlue"],
+      required: ["brightness", "contrast", "levelsBlack", "levelsWhite", "levelsGamma", "curveShadows", "curveMidtones", "curveHighlights", "exposure", "vibrance", "saturation", "hue", "lightness"],
     },
     description: {
       type: "string",
@@ -143,7 +190,11 @@ const ADJUSTMENT_SCHEMA = {
   properties: Object.fromEntries(
     Object.entries(EDIT_SCHEMA.properties).filter(([name]) => !["description", "keywords", "locationDecision", "iptcSceneCodes", "inferredLocation", "location"].includes(name)),
   ),
-  required: ["photoshopFinish"],
+  required: [
+    "temperature", "tint", "exposure", "contrast", "highlights", "shadows", "whites", "blacks",
+    "texture", "clarity", "dehaze", "vibrance", "saturation", "mixer", "curve", "colorGrading", "detail",
+    "straightenDegrees", "orientation", "cropCenterX", "cropCenterY", "cropScale", "photoshopFinish",
+  ],
 } as const
 
 const METADATA_SCHEMA = {
@@ -175,19 +226,36 @@ type Edit = {
   vibrance?: number
   saturation?: number
   mixer?: Record<string, number>
+  curve?: { shadows: number; midtones: number; highlights: number }
+  colorGrading?: {
+    shadowHue: number; shadowSaturation: number
+    midtoneHue: number; midtoneSaturation: number
+    highlightHue: number; highlightSaturation: number
+    blending: number; balance: number
+  }
+  detail?: {
+    sharpening: number; radius: number; detail: number; masking: number
+    luminanceNoiseReduction: number; colorNoiseReduction: number
+  }
   straightenDegrees?: number
   orientation?: "auto" | "landscape" | "portrait"
   cropCenterX?: number
   cropCenterY?: number
   cropScale?: number
   photoshopFinish?: {
-    exposure: number
     brightness: number
     contrast: number
-    toneGamma: number
-    cyanRed: number
-    magentaGreen: number
-    yellowBlue: number
+    levelsBlack: number
+    levelsWhite: number
+    levelsGamma: number
+    curveShadows: number
+    curveMidtones: number
+    curveHighlights: number
+    exposure: number
+    vibrance: number
+    saturation: number
+    hue: number
+    lightness: number
   }
   description?: string
   keywords?: string[]
@@ -276,61 +344,6 @@ function clamp(value: unknown, fallback: number, min: number, max: number) {
   return Math.min(max, Math.max(min, parsed))
 }
 
-function xml(value: string | number) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll('"', "&quot;")
-}
-
-function cameraRawXmp(edit: Edit) {
-  const values: Record<string, string | number> = {
-    Version: "17.0",
-    ProcessVersion: "15.4",
-    WhiteBalance: edit.temperature || edit.tint ? "Custom" : "As Shot",
-    Exposure2012: clamp(edit.exposure, 0, -5, 5),
-    Contrast2012: clamp(edit.contrast, 0, -100, 100),
-    Highlights2012: clamp(edit.highlights, 0, -100, 100),
-    Shadows2012: clamp(edit.shadows, 0, -100, 100),
-    Whites2012: clamp(edit.whites, 0, -100, 100),
-    Blacks2012: clamp(edit.blacks, 0, -100, 100),
-    Texture: clamp(edit.texture, 0, -100, 100),
-    Clarity2012: clamp(edit.clarity, 0, -100, 100),
-    Dehaze: clamp(edit.dehaze, 0, -100, 100),
-    Vibrance: clamp(edit.vibrance, 0, -100, 100),
-    Saturation: clamp(edit.saturation, 0, -100, 100),
-    RemoveChromaticAberration: 1,
-    AutoLateralCA: 1,
-    LensProfileEnable: 1,
-    LensManualDistortionAmount: 0,
-  }
-  if (edit.temperature !== undefined) values.Temperature = clamp(edit.temperature, 5500, 2000, 50000)
-  if (edit.tint !== undefined) values.Tint = clamp(edit.tint, 0, -150, 150)
-
-  const colorNames: Record<string, string> = {
-    red: "Red", orange: "Orange", yellow: "Yellow", green: "Green",
-    aqua: "Aqua", blue: "Blue", purple: "Purple", magenta: "Magenta",
-  }
-  for (const [key, value] of Object.entries(edit.mixer ?? {})) {
-    const match = key.match(/^(red|orange|yellow|green|aqua|blue|purple|magenta)(Hue|Saturation|Luminance)$/)
-    if (!match) continue
-    values[`${match[2]}Adjustment${colorNames[match[1]]}`] = clamp(value, 0, -100, 100)
-  }
-
-  const attributes = Object.entries(values)
-    .map(([key, value]) => `      crs:${key}="${xml(value)}"`)
-    .join("\n")
-
-  return `<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
-<x:xmpmeta xmlns:x="adobe:ns:meta/">
-  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-    <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
-${attributes}/>
-  </rdf:RDF>
-</x:xmpmeta>
-<?xpacket end="w"?>`
-}
-
 async function runPhotoshop(pluginDirectory: string, script: string, config: unknown, signal: AbortSignal) {
   const runner = path.join(pluginDirectory, "scripts", "invoke-photoshop.ps1")
   const scriptPath = path.join(pluginDirectory, "scripts", script)
@@ -375,10 +388,8 @@ function currentPromptText(job: Job, message: string) {
       return `${offset}: ${path.basename(entry.raw)} (${bias}${gps}${description}${creator})`
     })
     .join("\n")
-  const metadataInstruction = `Use these preview(s) only to choose the exposure and image adjustments. Identification and metadata must wait until the finished JPEG is saved and returned.`
-  const instruction = group.type === "bracket"
-    ? `This is a five-shot bracket set. Compare all five attached previews and call raw_photo_processor_apply with selectedOffset 0-4 for the best usable exposure plus restrained Camera Raw and Photoshop finishing adjustments. Only that frame will be processed.`
-    : `Analyze the attached preview, then call raw_photo_processor_apply with realistic Camera Raw values, a 3:2 crop, and a subtle photorealistic Photoshop finishing pass.`
+  const metadataInstruction = `Use these previews only to choose image adjustments. Identification and metadata must wait until the finished HDR JPEG is saved and returned.`
+  const instruction = `This is one five-shot bracket set. Compare all five attached previews, then call raw_photo_hdr_processor_apply with restrained settings for Camera Raw Light, Color, Effects, Curve, Color Mixer, Color Grading, and Detail, followed by the required Photoshop finish. All five frames will be aligned, deghosted, and merged to a 32-bit HDR.`
   return `${message}\nJob: ${job.id}\nSequence position ${job.index + 1} of ${job.entries.length}:\n${exposureSummary}\n${instruction}\n${metadataInstruction}`
 }
 
@@ -448,55 +459,41 @@ async function ensureMetadata(pluginDirectory: string, job: Job, indices: number
 }
 
 async function prepareCurrent(pluginDirectory: string, job: Job, signal: AbortSignal) {
-  let lookahead = Array.from({ length: 5 }, (_, offset) => job.index + offset)
-    .filter((index) => index < job.entries.length)
-  await ensureMetadata(pluginDirectory, job, lookahead, signal)
-
-  // A non-zero run immediately before a new zero-EV frame is a partial/ending
-  // bracket sequence. Ignore that run and restart at the zero-EV frame.
-  if (!isZeroBias(job.entries[job.index].exposureBias)) {
-    const nextZero = lookahead.slice(1).find((index) => isZeroBias(job.entries[index].exposureBias))
-    if (nextZero !== undefined) {
-      for (let index = job.index; index < nextZero; index += 1) {
-        job.skipped.push({ raw: job.entries[index].raw, reason: "Non-zero EV frame precedes a new 0 EV sequence." })
+  while (job.index < job.entries.length) {
+    const lookahead = Array.from({ length: 5 }, (_, offset) => job.index + offset)
+      .filter((index) => index < job.entries.length)
+    await ensureMetadata(pluginDirectory, job, lookahead, signal)
+    const bracket = lookahead.length === 5
+      && isZeroBias(job.entries[lookahead[0]].exposureBias)
+      && lookahead.slice(1).every((index) => {
+        const bias = job.entries[index].exposureBias
+        return typeof bias === "number" && !isZeroBias(bias)
+      })
+    if (bracket) {
+      if (!job.overwrite) {
+        const entry = job.entries[lookahead[0]]
+        let outputExists = false
+        try { await stat(entry.psd); outputExists = true } catch {}
+        try { await stat(entry.jpeg); outputExists = true } catch {}
+        if (outputExists) {
+          for (const index of lookahead) job.skipped.push({ raw: job.entries[index].raw, reason: "HDR output already exists (overwrite=false)." })
+          job.index += 5
+          continue
+        }
       }
-      job.index = nextZero
-      lookahead = Array.from({ length: 5 }, (_, offset) => job.index + offset)
-        .filter((index) => index < job.entries.length)
-      await ensureMetadata(pluginDirectory, job, lookahead, signal)
+      job.group = { type: "bracket", indices: lookahead }
+      await makePreviews(pluginDirectory, lookahead.map((index) => job.entries[index]), signal)
+      return
     }
+    job.skipped.push({ raw: job.entries[job.index].raw, reason: "Not the first frame of a complete five-shot HDR bracket set." })
+    job.index += 1
   }
-
-  const bracket = lookahead.length === 5
-    && isZeroBias(job.entries[lookahead[0]].exposureBias)
-    && lookahead.slice(1).every((index) => {
-      const bias = job.entries[index].exposureBias
-      return typeof bias === "number" && !isZeroBias(bias)
-    })
-  job.group = { type: bracket ? "bracket" : "single", indices: bracket ? lookahead : [job.index] }
-  await makePreviews(pluginDirectory, job.group.indices.map((index) => job.entries[index]), signal)
+  job.group = undefined
 }
 
-async function findSidecar(raw: string) {
-  const directory = path.dirname(raw)
-  const target = `${path.parse(raw).name}.xmp`.toLowerCase()
-  const existing = (await readdir(directory)).find((name) => name.toLowerCase() === target)
-  return path.join(directory, existing ?? `${path.parse(raw).name}.xmp`)
-}
-
-async function applyEdit(pluginDirectory: string, entry: JobEntry, edit: Edit, overwrite: boolean, signal: AbortSignal) {
-  const sidecar = await findSidecar(entry.raw)
-  let previous: Buffer | undefined
-  try {
-    previous = await readFile(sidecar)
-  } catch (error: any) {
-    if (error?.code !== "ENOENT") throw error
-  }
-
-  await writeFile(sidecar, cameraRawXmp(edit), "utf8")
-  try {
-    await runPhotoshop(pluginDirectory, "process.jsx", {
-      input: entry.raw,
+async function applyEdit(pluginDirectory: string, inputs: string[], entry: JobEntry, edit: Edit, overwrite: boolean, signal: AbortSignal) {
+  await runPhotoshop(pluginDirectory, "process.jsx", {
+      inputs,
       psd: entry.psd,
       jpeg: entry.jpeg,
       overwrite,
@@ -506,21 +503,24 @@ async function applyEdit(pluginDirectory: string, entry: JobEntry, edit: Edit, o
       cropCenterY: clamp(edit.cropCenterY, 0.5, 0, 1),
       cropScale: clamp(edit.cropScale, 0.96, 0.5, 1),
       photoshopFinish: {
-        exposure: clamp(edit.photoshopFinish?.exposure, 0, -2, 2),
         brightness: clamp(edit.photoshopFinish?.brightness, 0, -50, 50),
         contrast: clamp(edit.photoshopFinish?.contrast, 0, -50, 50),
-        toneGamma: clamp(edit.photoshopFinish?.toneGamma, 1, 0.5, 1.5),
-        cyanRed: clamp(edit.photoshopFinish?.cyanRed, 0, -30, 30),
-        magentaGreen: clamp(edit.photoshopFinish?.magentaGreen, 0, -30, 30),
-        yellowBlue: clamp(edit.photoshopFinish?.yellowBlue, 0, -30, 30),
+        levelsBlack: clamp(edit.photoshopFinish?.levelsBlack, 0, 0, 40),
+        levelsWhite: clamp(edit.photoshopFinish?.levelsWhite, 255, 215, 255),
+        levelsGamma: clamp(edit.photoshopFinish?.levelsGamma, 1, 0.5, 1.5),
+        curveShadows: clamp(edit.photoshopFinish?.curveShadows, 0, -30, 30),
+        curveMidtones: clamp(edit.photoshopFinish?.curveMidtones, 0, -30, 30),
+        curveHighlights: clamp(edit.photoshopFinish?.curveHighlights, 0, -30, 30),
+        exposure: clamp(edit.photoshopFinish?.exposure, 0, -2, 2),
+        vibrance: clamp(edit.photoshopFinish?.vibrance, 0, -50, 50),
+        saturation: clamp(edit.photoshopFinish?.saturation, 0, -30, 30),
+        hue: clamp(edit.photoshopFinish?.hue, 0, -20, 20),
+        lightness: clamp(edit.photoshopFinish?.lightness, 0, -20, 20),
       },
+      cameraRaw: edit,
       identificationPreview: entry.identificationPreview,
     }, signal)
-    await stat(entry.identificationPreview)
-  } finally {
-    if (previous) await writeFile(sidecar, previous)
-    else await rm(sidecar, { force: true })
-  }
+  await stat(entry.identificationPreview)
 }
 
 async function updateOutputMetadata(pluginDirectory: string, entry: JobEntry, edit: Edit, signal: AbortSignal) {
@@ -536,7 +536,7 @@ async function updateOutputMetadata(pluginDirectory: string, entry: JobEntry, ed
     description: hasLocation && typeof edit.description === "string" ? edit.description.trim() : null,
     keywords: [...new Set((edit.keywords ?? []).map((keyword) => keyword.trim()).filter(Boolean))].slice(0, 30),
     iptcSceneCodes: [...new Set((edit.iptcSceneCodes ?? []).filter((code) => IPTC_SCENE_CODES.has(code)))].slice(0, 20),
-    gps: inferred ? { latitude: inferred.latitude, longitude: inferred.longitude } : null,
+    gps: entry.gps ?? (inferred ? { latitude: inferred.latitude, longitude: inferred.longitude } : null),
     location: hasLocation && edit.location ? {
       sublocation: edit.location.sublocation?.trim() || null,
       city: edit.location.city.trim(),
@@ -552,7 +552,7 @@ function metadataPromptText(job: Job, entry: JobEntry) {
   const gps = entry.gps
     ? `${entry.gps.latitude.toFixed(6)}, ${entry.gps.longitude.toFixed(6)}`
     : "none"
-  return `Identify this attached finished-JPEG preview, then call raw_photo_processor_finalize_metadata for job ${job.id}. Metadata targets the full-resolution PSD/JPEG. Source GPS: ${gps}. Source Description: ${entry.sourceDescription ?? "none"}. Creator: ${entry.creator ?? "none"}. Research this photo independently. Any named place requires locationDecision=verified and complete location fields; without source GPS/Description, also provide >90% inferredLocation. Otherwise use unverified and emit no place names. Never identify people or put coordinates in Description. Select applicable Scene codes only from this official local catalog: ${IPTC_SCENE_CATALOG}`
+  return `Identify this attached finished-JPEG preview, then call raw_photo_hdr_processor_finalize_metadata for job ${job.id}. Metadata targets the full-resolution PSD/JPEG. Source GPS: ${gps}. Source Description: ${entry.sourceDescription ?? "none"}. Creator: ${entry.creator ?? "none"}. Research this photo independently. Any named place requires locationDecision=verified and complete location fields; without source GPS/Description, also provide >90% inferredLocation. Otherwise use unverified and emit no place names. Never identify people or put coordinates in Description. Select applicable Scene codes only from this official local catalog: ${IPTC_SCENE_CATALOG}`
 }
 
 function metadataResult(job: Job, entry: JobEntry) {
@@ -562,33 +562,23 @@ function metadataResult(job: Job, entry: JobEntry) {
 }
 
 async function nextUnprocessed(job: Job) {
-  while (job.index < job.entries.length) {
-    const entry = job.entries[job.index]
-    if (job.overwrite) return entry
-    let psdExists = false
-    let jpegExists = false
-    try { await stat(entry.psd); psdExists = true } catch {}
-    try { await stat(entry.jpeg); jpegExists = true } catch {}
-    if (!psdExists && !jpegExists) return entry
-    job.skipped.push({ raw: entry.raw, reason: "Output already exists (overwrite=false)." })
-    job.index += 1
-  }
+  return job.entries[job.index]
 }
 
 export default definePlugin({
-  id: "raw-photo-processor",
+  id: "raw-photo-processor-hdr",
   async setup(ctx) {
     const pluginDirectory = path.dirname(fileURLToPath(import.meta.url))
-    const configuredModel = process.env.RAW_PHOTO_PROCESSOR_MODEL
+    const configuredModel = process.env.RAW_PHOTO_PROCESSOR_HDR_MODEL
       || (typeof ctx.options.model === "string" ? ctx.options.model : "openai/gpt-6-luna")
     const requested = configuredModel.split("/")
     const requestedProvider = requested.shift() ?? ""
     const requestedModel = requested.join("/")
-    const configuredCompactionInterval = Number(process.env.RAW_PHOTO_PROCESSOR_COMPACT_EVERY ?? ctx.options.compactEvery ?? 8)
+    const configuredCompactionInterval = Number(process.env.RAW_PHOTO_PROCESSOR_HDR_COMPACT_EVERY ?? ctx.options.compactEvery ?? 8)
     const compactionInterval = Number.isFinite(configuredCompactionInterval)
       ? Math.min(50, Math.max(2, Math.round(configuredCompactionInterval)))
       : 8
-    const configuredCompactionPressure = Number(process.env.RAW_PHOTO_PROCESSOR_COMPACT_AT ?? ctx.options.compactAt ?? 0.65)
+    const configuredCompactionPressure = Number(process.env.RAW_PHOTO_PROCESSOR_HDR_COMPACT_AT ?? ctx.options.compactAt ?? 0.65)
     const compactionPressure = Number.isFinite(configuredCompactionPressure)
       ? Math.min(0.9, Math.max(0.4, configuredCompactionPressure))
       : 0.65
@@ -655,20 +645,24 @@ export default definePlugin({
       const jobID = sessionJobs.get(event.sessionID)
       const job = jobID ? jobs.get(jobID) : undefined
       const allowed = new Set(job
-        ? [job.pending ? "raw_photo_processor_finalize_metadata" : "raw_photo_processor_apply", "raw_photo_processor_cancel"]
-        : ["raw_photo_processor_start"])
+        ? [job.pending ? "raw_photo_hdr_processor_finalize_metadata" : "raw_photo_hdr_processor_apply", "raw_photo_hdr_processor_cancel"]
+        : ["raw_photo_hdr_processor_start"])
       for (const name of Object.keys(event.tools)) {
-        if (name.startsWith("raw_photo_processor_") && !allowed.has(name)) delete event.tools[name]
+        if (job && name.startsWith("raw_photo_processor_")) {
+          delete event.tools[name]
+          continue
+        }
+        if (name.startsWith("raw_photo_hdr_processor_") && !allowed.has(name)) delete event.tools[name]
       }
     })
 
     await ctx.command.transform((editor) => {
       editor.add({
-        name: "raw-photo-processor",
-        description: "Process every RAW photo in one folder into PSD and maximum-quality JPEG files.",
+        name: "raw-photo-processor-hdr",
+        description: "Merge complete five-shot RAW brackets into 32-bit HDR PSD and maximum-quality JPEG files.",
         execute: async ({ sessionID, prompt, delivery }) => {
           const folder = prompt.text.trim()
-          if (!folder) throw new Error("Provide one absolute folder path, for example: /raw-photo-processor C:\\Photos\\RAW")
+          if (!folder) throw new Error("Provide one absolute folder path, for example: /raw-photo-processor-hdr C:\\Photos\\RAW")
           try {
             await ctx.session.switchModel({ sessionID, model: { providerID: requestedProvider, id: requestedModel } })
           } catch {
@@ -677,7 +671,7 @@ export default definePlugin({
           await ctx.session.prompt({
             sessionID,
             delivery,
-            text: `Process exactly ${JSON.stringify(folder)}. Call raw_photo_processor_start once. For every queued image message, inspect its attachments, call the one available RAW workflow tool, then end the turn whenever more attachments are queued. Preview stage: choose the best bracket frame, restrained Camera Raw corrections, crop, and required subtle photorealistic Photoshop finish. Finished-JPEG stage: identify/research that photo and finalize unique metadata. Never restart, copy another photo's metadata, identify people, or cancel unless explicitly asked. Continue until complete.`,
+            text: `Process exactly ${JSON.stringify(folder)}. Call raw_photo_hdr_processor_start once. For every queued image message, inspect its attachments, call the one available HDR workflow tool, then end the turn whenever more attachments are queued. Preview stage: derive restrained Camera Raw and Photoshop corrections for a natural, photorealistic merge of all five frames. Finished-JPEG stage: identify/research that HDR and finalize unique metadata. Never restart, copy another photo's metadata, identify people, or cancel unless explicitly asked. Continue until complete.`,
           })
         },
       })
@@ -685,14 +679,14 @@ export default definePlugin({
 
     await ctx.tool.transform((editor) => {
       editor.namespace({
-        name: "raw_photo_processor",
-        description: "AI-guided Adobe Camera Raw and Photoshop batch processing for a single local folder.",
+        name: "raw_photo_hdr_processor",
+        description: "AI-guided five-frame Merge to HDR Pro, Adobe Camera Raw, and Photoshop processing for a local folder.",
       })
 
       editor.add({
         name: "start",
         description: "Start a non-recursive RAW processing job and return the first JPEG preview for visual assessment.",
-        options: { namespace: "raw_photo_processor", codemode: true },
+        options: { namespace: "raw_photo_hdr_processor", codemode: true },
         input: {
           type: "object",
           additionalProperties: false,
@@ -720,7 +714,7 @@ export default definePlugin({
             counts.set(stem, (counts.get(stem) ?? 0) + 1)
           }
           const id = randomUUID()
-          const work = path.join(tmpdir(), "Raw_Photo_Processor", id)
+          const work = path.join(tmpdir(), "Raw_Photo_Processor_HDR", id)
           await mkdir(work, { recursive: true })
           await mkdir(path.join(folder, "PSDs"), { recursive: true })
           await mkdir(path.join(folder, "JPEGs"), { recursive: true })
@@ -731,8 +725,8 @@ export default definePlugin({
               : parsed.name
             return {
               raw: path.join(folder, name),
-              psd: path.join(folder, "PSDs", `${stem}.psd`),
-              jpeg: path.join(folder, "JPEGs", `${stem}.jpg`),
+              psd: path.join(folder, "PSDs", `${stem}_HDR.psd`),
+              jpeg: path.join(folder, "JPEGs", `${stem}_HDR.jpg`),
               preview: path.join(work, `${String(index + 1).padStart(5, "0")}.jpg`),
               identificationPreview: path.join(work, `${String(index + 1).padStart(5, "0")}-finished.jpg`),
             }
@@ -766,6 +760,12 @@ export default definePlugin({
             }
             await context.progress({ status: `Reading metadata and creating preview(s) at image 1 of ${entries.length}` })
             await prepareCurrent(pluginDirectory, job, context.signal)
+            if (job.index >= job.entries.length) {
+              jobs.delete(id)
+              if (sessionJobs.get(context.sessionID) === id) sessionJobs.delete(context.sessionID)
+              await rm(work, { recursive: true, force: true })
+              return { content: `No complete five-shot HDR bracket sets need processing. Skipped ${job.skipped.length} RAW frame(s).` }
+            }
             const message = `Found ${entries.length} RAW image(s). Existing outputs are ${job.overwrite ? "replaced" : "skipped"}.`
             await queuePreviewAttachments(context.sessionID, job, message)
             return currentResult(job, message)
@@ -780,32 +780,28 @@ export default definePlugin({
 
       editor.add({
         name: "apply",
-        description: "Apply image adjustments and save PSD/JPEG without generated metadata, then return the finished JPEG for identification.",
-        options: { namespace: "raw_photo_processor", codemode: true },
+        description: "Merge the current five frames, apply Camera Raw and Photoshop adjustments, save PSD/JPEG, then return the finished HDR for identification.",
+        options: { namespace: "raw_photo_hdr_processor", codemode: true },
         input: {
           type: "object",
           additionalProperties: false,
           properties: {
             jobID: { type: "string" },
-            selectedOffset: { type: "integer", minimum: 0, maximum: 4, description: "For a five-shot bracket set, the 0-based preview offset with the best exposure. Use 0 for a normal single image." },
             edit: ADJUSTMENT_SCHEMA,
           },
           required: ["jobID", "edit"],
         },
-        execute: async (input: { jobID: string; selectedOffset?: number; edit: Edit }, context) => {
+        execute: async (input: { jobID: string; edit: Edit }, context) => {
           const job = jobs.get(input.jobID)
           if (!job) throw new Error("Unknown or completed RAW processing job.")
           if (job.sessionID !== context.sessionID) throw new Error("This RAW processing job belongs to another session.")
           if (job.pending) throw new Error("Finalize metadata for the already-saved JPEG before processing another image.")
           const group = job.group ?? { type: "single" as const, indices: [job.index] }
-          const selectedOffset = group.type === "bracket" ? input.selectedOffset : 0
-          if (group.type === "bracket" && (!Number.isInteger(selectedOffset) || selectedOffset! < 0 || selectedOffset! > 4)) {
-            throw new Error("Select the best bracket exposure with selectedOffset 0-4.")
-          }
-          const selectedIndex = group.indices[selectedOffset ?? 0]
+          if (group.type !== "bracket" || group.indices.length !== 5) throw new Error("The current item is not a complete five-shot HDR bracket.")
+          const selectedIndex = group.indices[0]
           const entry = job.entries[selectedIndex]
-          await context.progress({ status: `Processing selected exposure ${path.basename(entry.raw)} (${selectedIndex + 1}/${job.entries.length})` })
-          await applyEdit(pluginDirectory, entry, input.edit, job.overwrite, context.signal)
+          await context.progress({ status: `Merging five-shot HDR beginning with ${path.basename(entry.raw)} (${selectedIndex + 1}/${job.entries.length})` })
+          await applyEdit(pluginDirectory, group.indices.map((index) => job.entries[index].raw), entry, input.edit, job.overwrite, context.signal)
           job.pending = { group, selectedIndex }
           // Code Mode can reduce rich tool output to a pathname. Queue the finished
           // JPEG as a real session attachment so the next model turn receives image
@@ -823,7 +819,7 @@ export default definePlugin({
       editor.add({
         name: "finalize_metadata",
         description: "After visually identifying the finished JPEG, update metadata on both the already-saved PSD and JPEG, then continue the batch.",
-        options: { namespace: "raw_photo_processor", codemode: true },
+        options: { namespace: "raw_photo_hdr_processor", codemode: true },
         input: {
           type: "object",
           additionalProperties: false,
@@ -910,11 +906,6 @@ export default definePlugin({
           if (descriptionFingerprint) job.descriptions.add(descriptionFingerprint)
           job.keywordSets.add(keywordsFingerprint)
           job.completed.push({ raw: entry.raw, psd: entry.psd, jpeg: entry.jpeg })
-          if (group.type === "bracket") {
-            for (const index of group.indices) {
-              if (index !== selectedIndex) job.skipped.push({ raw: job.entries[index].raw, reason: `Bracket alternate; selected ${path.basename(entry.raw)}.` })
-            }
-          }
           job.index = group.indices[group.indices.length - 1] + 1
           job.group = undefined
           job.pending = undefined
@@ -925,6 +916,10 @@ export default definePlugin({
           job.tokenBaseline = currentTokens
           job.photosSinceCompaction += 1
           await nextUnprocessed(job)
+          if (job.index < job.entries.length) {
+            await context.progress({ status: `Reading metadata and creating preview(s) at image ${job.index + 1} of ${job.entries.length}` })
+            await prepareCurrent(pluginDirectory, job, context.signal)
+          }
           const finished = job.index >= job.entries.length
           const contextPressure = finished ? undefined : await readContextPressure(context.sessionID)
           let compactionStatus = "Context compaction not needed; batch complete."
@@ -941,12 +936,10 @@ export default definePlugin({
             if (sessionJobs.get(context.sessionID) === job.id) sessionJobs.delete(context.sessionID)
             await rm(job.work, { recursive: true, force: true })
             return {
-              content: `${performance}\nRAW processing complete. Created ${job.completed.length} PSD/JPEG pair(s); skipped ${job.skipped.length}.\nPSD files: ${path.join(job.folder, "PSDs")}\nJPEG files: ${path.join(job.folder, "JPEGs")}`,
+               content: `${performance}\nHDR processing complete. Created ${job.completed.length} PSD/JPEG pair(s); skipped ${job.skipped.length} RAW frame(s).\nPSD files: ${path.join(job.folder, "PSDs")}\nJPEG files: ${path.join(job.folder, "JPEGs")}`,
             }
           }
           job.photoStartedAt = Date.now()
-          await context.progress({ status: `Reading metadata and creating preview(s) at image ${job.index + 1} of ${job.entries.length}` })
-          await prepareCurrent(pluginDirectory, job, context.signal)
           const message = `Metadata updated after save for ${path.basename(entry.psd)} and JPEGs/${path.basename(entry.jpeg)}.\n${performance}`
           await queuePreviewAttachments(context.sessionID, job, message)
           return currentResult(job, message)
@@ -956,7 +949,7 @@ export default definePlugin({
       editor.add({
         name: "cancel",
         description: "Cancel only when the user explicitly requests cancellation. Never use this while waiting for queued image attachments or after a temporary visual-access delay.",
-        options: { namespace: "raw_photo_processor", codemode: true },
+        options: { namespace: "raw_photo_hdr_processor", codemode: true },
         input: {
           type: "object",
           additionalProperties: false,
