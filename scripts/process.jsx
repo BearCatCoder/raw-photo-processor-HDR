@@ -9,15 +9,15 @@
         if (!isFinite(value)) value = fallback;
         return clamp(value, low, high);
     }
-    function int(value, fallback, low, high) { return Math.round(number(value, fallback, low, high)); }
+    function integer(value, fallback, low, high) { return Math.round(number(value, fallback, low, high)); }
     function putInt(desc, key, value, fallback, low, high) {
-        desc.putInteger(charIDToTypeID(key), int(value, fallback, low, high));
+        desc.putInteger(charIDToTypeID(key), integer(value, fallback, low, high));
     }
     function curveList(curve) {
         var list = new ActionList();
-        var y1 = int(64 + Number(curve && curve.shadows || 0), 64, 1, 125);
-        var y2 = int(128 + Number(curve && curve.midtones || 0), 128, y1 + 1, 190);
-        var y3 = int(192 + Number(curve && curve.highlights || 0), 192, y2 + 1, 254);
+        var y1 = integer(64 + Number(curve && curve.shadows || 0), 64, 1, 125);
+        var y2 = integer(128 + Number(curve && curve.midtones || 0), 128, y1 + 1, 190);
+        var y3 = integer(192 + Number(curve && curve.highlights || 0), 192, y2 + 1, 254);
         var values = [0, 0, 64, y1, 128, y2, 192, y3, 255, 255];
         for (var i = 0; i < values.length; i += 1) list.putInteger(values[i]);
         return list;
@@ -47,7 +47,7 @@
         // Effects and point curve
         putInt(desc, "Cl12", edit.clarity, 0, -100, 100);
         putInt(desc, "Dhze", edit.dehaze, 0, -100, 100);
-        desc.putInteger(stringIDToTypeID("Texture"), int(edit.texture, 0, -100, 100));
+        desc.putInteger(stringIDToTypeID("Texture"), integer(edit.texture, 0, -100, 100));
         desc.putList(charIDToTypeID("Crv "), curveList(edit.curve));
 
         // Color Mixer (HSL)
@@ -67,20 +67,20 @@
         // Color Grading. Current ACR uses the long IDs; the legacy split-toning
         // IDs are also supplied so compatible older ACR releases preserve the look.
         var grade = edit.colorGrading || {};
-        var shadowHue = int(grade.shadowHue, 0, 0, 360);
-        var shadowSat = int(grade.shadowSaturation, 0, 0, 100);
-        var midtoneHue = int(grade.midtoneHue, 0, 0, 360);
-        var midtoneSat = int(grade.midtoneSaturation, 0, 0, 100);
-        var highlightHue = int(grade.highlightHue, 0, 0, 360);
-        var highlightSat = int(grade.highlightSaturation, 0, 0, 100);
-        var balance = int(grade.balance, 0, -100, 100);
+        var shadowHue = integer(grade.shadowHue, 0, 0, 360);
+        var shadowSat = integer(grade.shadowSaturation, 0, 0, 100);
+        var midtoneHue = integer(grade.midtoneHue, 0, 0, 360);
+        var midtoneSat = integer(grade.midtoneSaturation, 0, 0, 100);
+        var highlightHue = integer(grade.highlightHue, 0, 0, 360);
+        var highlightSat = integer(grade.highlightSaturation, 0, 0, 100);
+        var balance = integer(grade.balance, 0, -100, 100);
         desc.putInteger(stringIDToTypeID("ColorGradeShadowHue"), shadowHue);
         desc.putInteger(stringIDToTypeID("ColorGradeShadowSat"), shadowSat);
         desc.putInteger(stringIDToTypeID("ColorGradeMidtoneHue"), midtoneHue);
         desc.putInteger(stringIDToTypeID("ColorGradeMidtoneSat"), midtoneSat);
         desc.putInteger(stringIDToTypeID("ColorGradeHighlightHue"), highlightHue);
         desc.putInteger(stringIDToTypeID("ColorGradeHighlightSat"), highlightSat);
-        desc.putInteger(stringIDToTypeID("ColorGradeBlending"), int(grade.blending, 50, 0, 100));
+        desc.putInteger(stringIDToTypeID("ColorGradeBlending"), integer(grade.blending, 50, 0, 100));
         desc.putInteger(stringIDToTypeID("ColorGradeBalance"), balance);
         putInt(desc, "STSH", shadowHue, 0, 0, 360);
         putInt(desc, "STSS", shadowSat, 0, 0, 100);
@@ -104,12 +104,12 @@
         if (doc.activeLayer.kind === LayerKind.SMARTOBJECT) {
             doc.activeLayer.rasterize(RasterizeType.ENTIRELAYER);
         }
-        var brightness = int(finish.brightness, 0, -50, 50);
-        var contrast = int(finish.contrast, 0, -50, 50);
+        var brightness = integer(finish.brightness, 0, -50, 50);
+        var contrast = integer(finish.contrast, 0, -50, 50);
         if (brightness || contrast) doc.activeLayer.adjustBrightnessContrast(brightness, contrast);
 
-        var levelsBlack = int(finish.levelsBlack, 0, 0, 40);
-        var levelsWhite = int(finish.levelsWhite, 255, 215, 255);
+        var levelsBlack = integer(finish.levelsBlack, 0, 0, 40);
+        var levelsWhite = integer(finish.levelsWhite, 255, 215, 255);
         var levelsGamma = number(finish.levelsGamma, 1, 0.5, 1.5);
         if (levelsBlack || levelsWhite !== 255 || Math.abs(levelsGamma - 1) > 0.001) {
             doc.activeLayer.adjustLevels(levelsBlack, levelsWhite, levelsGamma, 0, 255);
@@ -121,9 +121,9 @@
             highlights: number(finish.curveHighlights, 0, -30, 30)
         };
         if (curve.shadows || curve.midtones || curve.highlights) {
-            var y1 = int(64 + curve.shadows, 64, 1, 125);
-            var y2 = int(128 + curve.midtones, 128, y1 + 1, 190);
-            var y3 = int(192 + curve.highlights, 192, y2 + 1, 254);
+            var y1 = integer(64 + curve.shadows, 64, 1, 125);
+            var y2 = integer(128 + curve.midtones, 128, y1 + 1, 190);
+            var y3 = integer(192 + curve.highlights, 192, y2 + 1, 254);
             doc.activeLayer.adjustCurves([[0, 0], [64, y1], [128, y2], [192, y3], [255, 255]]);
         }
 
@@ -136,16 +136,16 @@
             executeAction(charIDToTypeID("Exps"), exposureSettings, DialogModes.NO);
         }
 
-        var vibrance = int(finish.vibrance, 0, -50, 50);
+        var vibrance = integer(finish.vibrance, 0, -50, 50);
         if (vibrance) {
             var vibranceSettings = new ActionDescriptor();
             vibranceSettings.putInteger(stringIDToTypeID("vibrance"), vibrance);
             vibranceSettings.putInteger(stringIDToTypeID("saturation"), 0);
             executeAction(stringIDToTypeID("vibrance"), vibranceSettings, DialogModes.NO);
         }
-        var hue = int(finish.hue, 0, -20, 20);
-        var saturation = int(finish.saturation, 0, -30, 30);
-        var lightness = int(finish.lightness, 0, -20, 20);
+        var hue = integer(finish.hue, 0, -20, 20);
+        var saturation = integer(finish.saturation, 0, -30, 30);
+        var lightness = integer(finish.lightness, 0, -20, 20);
         if (hue || saturation || lightness) doc.activeLayer.adjustHueSaturation(hue, saturation, lightness);
     }
 
