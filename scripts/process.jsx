@@ -136,6 +136,12 @@
             executeAction(charIDToTypeID("Exps"), exposureSettings, DialogModes.NO);
         }
 
+    }
+
+    function applyPhotoshopColorFinish(doc, finish) {
+        if (!finish) return;
+        // Vibrance and Hue/Saturation are unavailable on 32-bit documents in
+        // Photoshop. Apply them after HDR Toning has produced the 16-bit image.
         var vibrance = integer(finish.vibrance, 0, -50, 50);
         if (vibrance) {
             var vibranceSettings = new ActionDescriptor();
@@ -168,7 +174,7 @@
         var target = new XMPMeta(doc.xmpMetadata.rawData);
         // Preserve all existing HDR metadata. Fill only properties missing from
         // the merge, including camera/lens, focal length, aperture, and focus data.
-        XMPUtils.appendProperties(source, target, true, false, false);
+        XMPUtils.appendProperties(source, target, XMPConst.APPEND_ALL_PROPERTIES);
         doc.xmpMetadata.rawData = target.serialize();
     }
 
@@ -303,6 +309,7 @@
         applyHdrToning(RPP_CONFIG.hdrToning);
         if (doc.bitsPerChannel !== BitsPerChannelType.SIXTEEN) throw new Error("HDR Toning did not produce a 16 Bits/Channel document.");
         appendMissingSourceMetadata(doc, firstSourceXmp);
+        applyPhotoshopColorFinish(doc, RPP_CONFIG.photoshopFinish);
         applyLensCorrection();
 
         var psdOptions = new PhotoshopSaveOptions();
