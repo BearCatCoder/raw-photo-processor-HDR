@@ -77,7 +77,7 @@
         doc = app.open(new File(RPP_CONFIG.psd));
         applyMetadata(doc);
         var psdOptions = new PhotoshopSaveOptions();
-        psdOptions.layers = true;
+        psdOptions.layers = false;
         psdOptions.embedColorProfile = true;
         doc.saveAs(new File(RPP_CONFIG.psd), psdOptions, true, Extension.LOWERCASE);
         doc.close(SaveOptions.DONOTSAVECHANGES);

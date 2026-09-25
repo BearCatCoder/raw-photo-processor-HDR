@@ -149,6 +149,80 @@
         if (hue || saturation || lightness) doc.activeLayer.adjustHueSaturation(hue, saturation, lightness);
     }
 
+    function readFirstSourceXmp(file) {
+        var sourceDoc = null;
+        try {
+            sourceDoc = app.open(file);
+            return String(sourceDoc.xmpMetadata.rawData || "");
+        } finally {
+            if (sourceDoc) sourceDoc.close(SaveOptions.DONOTSAVECHANGES);
+        }
+    }
+
+    function appendMissingSourceMetadata(doc, sourceXmp) {
+        if (!sourceXmp) return;
+        if (ExternalObject.AdobeXMPScript === undefined) {
+            ExternalObject.AdobeXMPScript = new ExternalObject("lib:AdobeXMPScript");
+        }
+        var source = new XMPMeta(sourceXmp);
+        var target = new XMPMeta(doc.xmpMetadata.rawData);
+        // Preserve all existing HDR metadata. Fill only properties missing from
+        // the merge, including camera/lens, focal length, aperture, and focus data.
+        XMPUtils.appendProperties(source, target, true, false, false);
+        doc.xmpMetadata.rawData = target.serialize();
+    }
+
+    function hdrToningCurve(curve) {
+        curve = curve || {};
+        var y1 = int(64 + Number(curve.shadows || 0), 64, 1, 125);
+        var y2 = int(128 + Number(curve.midtones || 0), 128, y1 + 1, 190);
+        var y3 = int(192 + Number(curve.highlights || 0), 192, y2 + 1, 254);
+        var points = [0, 0, 64, y1, 128, y2, 192, y3, 255, 255];
+        var curveDesc = new ActionDescriptor();
+        curveDesc.putString(stringIDToTypeID("name"), "HDR Photorealistic");
+        var pointList = new ActionList();
+        for (var i = 0; i < points.length; i += 2) {
+            var point = new ActionDescriptor();
+            point.putDouble(stringIDToTypeID("horizontal"), points[i]);
+            point.putDouble(stringIDToTypeID("vertical"), points[i + 1]);
+            point.putBoolean(charIDToTypeID("Cnty"), false);
+            pointList.putObject(charIDToTypeID("Pnt "), point);
+        }
+        curveDesc.putList(stringIDToTypeID("curve"), pointList);
+        return curveDesc;
+    }
+
+    function applyHdrToning(settings) {
+        settings = settings || {};
+        var desc = new ActionDescriptor();
+        desc.putInteger(stringIDToTypeID("version"), 6);
+        desc.putInteger(stringIDToTypeID("method"), 3);
+        desc.putDouble(stringIDToTypeID("radius"), number(settings.radius, 80, 0, 500));
+        desc.putDouble(stringIDToTypeID("threshold"), number(settings.strength, 0.5, 0, 4));
+        desc.putDouble(stringIDToTypeID("center"), number(settings.gamma, 1, 0.1, 2));
+        desc.putDouble(stringIDToTypeID("brightness"), number(settings.exposure, 0, -5, 5));
+        desc.putDouble(stringIDToTypeID("detail"), number(settings.detail, 30, -300, 300));
+        desc.putDouble(stringIDToTypeID("shallow"), number(settings.shadows, 0, -100, 100));
+        desc.putDouble(stringIDToTypeID("highlights"), number(settings.highlights, 0, -100, 100));
+        desc.putDouble(stringIDToTypeID("vibrance"), number(settings.vibrance, 12, -100, 100));
+        desc.putDouble(stringIDToTypeID("saturation"), number(settings.saturation, 0, -100, 100));
+        desc.putBoolean(stringIDToTypeID("smooth"), settings.smoothEdges !== false);
+        desc.putObject(stringIDToTypeID("classFXShapeCurve"), charIDToTypeID("ShpC"), hdrToningCurve(settings.curve));
+        convertFromHDRNoDialog(16, desc);
+    }
+
+    function applyLensCorrection() {
+        var desc = new ActionDescriptor();
+        desc.putString(charIDToTypeID("LnPp"), "");
+        desc.putBoolean(charIDToTypeID("LnAg"), true);
+        desc.putBoolean(charIDToTypeID("LnAc"), true);
+        desc.putBoolean(charIDToTypeID("LnAv"), true);
+        desc.putBoolean(charIDToTypeID("LnAs"), true);
+        desc.putInteger(charIDToTypeID("LnFt"), 1);
+        executeAction(charIDToTypeID("LnCr"), desc, DialogModes.NO);
+        app.refresh();
+    }
+
     function cropDocument(doc) {
         var sourceWidth = px(doc.width);
         var sourceHeight = px(doc.height);
@@ -191,9 +265,11 @@
     var originalDialogs = app.displayDialogs;
     var originalUnits = app.preferences.rulerUnits;
     var doc = null;
+    var firstSourceXmp = "";
     try {
         app.displayDialogs = DialogModes.NO;
         app.preferences.rulerUnits = Units.PIXELS;
+        firstSourceXmp = readFirstSourceXmp(new File(RPP_CONFIG.inputs[0]));
 
         // Use Adobe's installed Merge To HDR Pro automation. Setting 32-bit plus
         // ACR toning is the scripted equivalent of "Complete Toning in Adobe Camera Raw".
@@ -219,14 +295,21 @@
         cropDocument(doc);
         applyPhotoshopFinish(doc, RPP_CONFIG.photoshopFinish);
 
-        // Preserve the completed HDR master as a 32 Bits/Channel PSD.
-        if (doc.bitsPerChannel !== BitsPerChannelType.THIRTYTWO) throw new Error("The HDR document is not 32 Bits/Channel before PSD save.");
+        // Final output preparation: flatten the completed merge, tone-map it to
+        // 16 Bits/Channel, restore missing first-frame metadata, then run the
+        // profile-based Lens Correction filter before either output is saved.
+        doc.flatten();
+        appendMissingSourceMetadata(doc, firstSourceXmp);
+        applyHdrToning(RPP_CONFIG.hdrToning);
+        if (doc.bitsPerChannel !== BitsPerChannelType.SIXTEEN) throw new Error("HDR Toning did not produce a 16 Bits/Channel document.");
+        appendMissingSourceMetadata(doc, firstSourceXmp);
+        applyLensCorrection();
+
         var psdOptions = new PhotoshopSaveOptions();
-        psdOptions.layers = true;
+        psdOptions.layers = false;
         psdOptions.embedColorProfile = true;
         doc.saveAs(new File(RPP_CONFIG.psd), psdOptions, true, Extension.LOWERCASE);
 
-        doc.flatten();
         if (doc.bitsPerChannel !== BitsPerChannelType.EIGHT) doc.bitsPerChannel = BitsPerChannelType.EIGHT;
         var jpegOptions = new JPEGSaveOptions();
         jpegOptions.quality = 12;

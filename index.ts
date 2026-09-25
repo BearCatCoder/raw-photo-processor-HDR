@@ -100,6 +100,35 @@ const EDIT_SCHEMA = {
       },
       required: ["sharpening", "radius", "detail", "masking", "luminanceNoiseReduction", "colorNoiseReduction"],
     },
+    hdrToning: {
+      type: "object",
+      additionalProperties: false,
+      description: "Photoshop HDR Toning settings used while converting the flattened 32-bit merge to 16 Bits/Channel. Preserve a realistic, non-washed-out result with natural vibrance.",
+      properties: {
+        radius: number(0, 500, "Edge Glow radius in pixels."),
+        strength: number(0, 4, "Edge Glow strength."),
+        gamma: number(0.1, 2, "Tone and Detail gamma."),
+        exposure: number(-5, 5, "Tone and Detail exposure."),
+        detail: number(-300, 300, "Tone and Detail detail amount."),
+        shadows: number(-100, 100, "Advanced shadow adjustment."),
+        highlights: number(-100, 100, "Advanced highlight adjustment."),
+        vibrance: number(-100, 100, "HDR Toning vibrance. Prefer restrained positive values."),
+        saturation: number(-100, 100, "HDR Toning saturation."),
+        smoothEdges: { type: "boolean", description: "Smooth edge transitions." },
+        curve: {
+          type: "object",
+          additionalProperties: false,
+          description: "HDR Toning curve output offsets; keep the result monotonic.",
+          properties: {
+            shadows: number(-40, 40, "Output offset near input 64."),
+            midtones: number(-40, 40, "Output offset near input 128."),
+            highlights: number(-40, 40, "Output offset near input 192."),
+          },
+          required: ["shadows", "midtones", "highlights"],
+        },
+      },
+      required: ["radius", "strength", "gamma", "exposure", "detail", "shadows", "highlights", "vibrance", "saturation", "smoothEdges", "curve"],
+    },
     straightenDegrees: number(-45, 45, "Clockwise rotation needed to straighten the image."),
     orientation: {
       type: "string",
@@ -192,7 +221,7 @@ const ADJUSTMENT_SCHEMA = {
   ),
   required: [
     "temperature", "tint", "exposure", "contrast", "highlights", "shadows", "whites", "blacks",
-    "texture", "clarity", "dehaze", "vibrance", "saturation", "mixer", "curve", "colorGrading", "detail",
+    "texture", "clarity", "dehaze", "vibrance", "saturation", "mixer", "curve", "colorGrading", "detail", "hdrToning",
     "straightenDegrees", "orientation", "cropCenterX", "cropCenterY", "cropScale", "photoshopFinish",
   ],
 } as const
@@ -236,6 +265,12 @@ type Edit = {
   detail?: {
     sharpening: number; radius: number; detail: number; masking: number
     luminanceNoiseReduction: number; colorNoiseReduction: number
+  }
+  hdrToning?: {
+    radius: number; strength: number; gamma: number; exposure: number; detail: number
+    shadows: number; highlights: number; vibrance: number; saturation: number
+    smoothEdges: boolean
+    curve: { shadows: number; midtones: number; highlights: number }
   }
   straightenDegrees?: number
   orientation?: "auto" | "landscape" | "portrait"
@@ -389,7 +424,7 @@ function currentPromptText(job: Job, message: string) {
     })
     .join("\n")
   const metadataInstruction = `Use these previews only to choose image adjustments. Identification and metadata must wait until the finished HDR JPEG is saved and returned.`
-  const instruction = `This is one five-shot bracket set. Compare all five attached previews, then call raw_photo_hdr_processor_apply with jobID and all adjustment fields directly at the top level (there is no edit wrapper). Use restrained settings for Camera Raw Light, Color, Effects, Curve, Color Mixer, Color Grading, and Detail, followed by the required Photoshop finish. All five frames will be aligned, deghosted, and merged to a 32-bit HDR.`
+  const instruction = `This is one five-shot bracket set. Compare all five attached previews, then call raw_photo_hdr_processor_apply with jobID and all adjustment fields directly at the top level (there is no edit wrapper). Use restrained settings for Camera Raw Light, Color, Effects, Curve, Color Mixer, Color Grading, and Detail, followed by the required Photoshop finish and realistic HDR Toning with natural vibrance. All five frames will be aligned and deghosted, then the completed merge will be flattened, tone-mapped to 16 Bits/Channel, and lens-corrected before saving.`
   return `${message}\nJob: ${job.id}\nSequence position ${job.index + 1} of ${job.entries.length}:\n${exposureSummary}\n${instruction}\n${metadataInstruction}`
 }
 
@@ -516,6 +551,23 @@ async function applyEdit(pluginDirectory: string, inputs: string[], entry: JobEn
         saturation: clamp(edit.photoshopFinish?.saturation, 0, -30, 30),
         hue: clamp(edit.photoshopFinish?.hue, 0, -20, 20),
         lightness: clamp(edit.photoshopFinish?.lightness, 0, -20, 20),
+      },
+      hdrToning: {
+        radius: clamp(edit.hdrToning?.radius, 80, 0, 500),
+        strength: clamp(edit.hdrToning?.strength, 0.5, 0, 4),
+        gamma: clamp(edit.hdrToning?.gamma, 1, 0.1, 2),
+        exposure: clamp(edit.hdrToning?.exposure, 0, -5, 5),
+        detail: clamp(edit.hdrToning?.detail, 30, -300, 300),
+        shadows: clamp(edit.hdrToning?.shadows, 0, -100, 100),
+        highlights: clamp(edit.hdrToning?.highlights, 0, -100, 100),
+        vibrance: clamp(edit.hdrToning?.vibrance, 12, -100, 100),
+        saturation: clamp(edit.hdrToning?.saturation, 0, -100, 100),
+        smoothEdges: edit.hdrToning?.smoothEdges !== false,
+        curve: {
+          shadows: clamp(edit.hdrToning?.curve?.shadows, 0, -40, 40),
+          midtones: clamp(edit.hdrToning?.curve?.midtones, 0, -40, 40),
+          highlights: clamp(edit.hdrToning?.curve?.highlights, 0, -40, 40),
+        },
       },
       cameraRaw: edit,
       identificationPreview: entry.identificationPreview,
@@ -671,7 +723,7 @@ export default definePlugin({
           await ctx.session.prompt({
             sessionID,
             delivery,
-            text: `Process exactly ${JSON.stringify(folder)}. Call raw_photo_hdr_processor_start once. For every queued image message, inspect its attachments, call the one available HDR workflow tool, then end the turn whenever more attachments are queued. Preview stage: derive restrained Camera Raw and Photoshop corrections for a natural, photorealistic merge of all five frames. Finished-JPEG stage: identify/research that HDR and finalize unique metadata. Never restart, copy another photo's metadata, identify people, or cancel unless explicitly asked. Continue until complete.`,
+            text: `Process exactly ${JSON.stringify(folder)}. Call raw_photo_hdr_processor_start once. For every queued image message, inspect its attachments, call the one available HDR workflow tool, then end the turn whenever more attachments are queued. Preview stage: derive restrained Camera Raw, Photoshop, and HDR Toning corrections for a natural, vibrant, non-washed-out merge of all five frames. The plugin will flatten, tone-map to 16 Bits/Channel, restore missing lens metadata from frame one, and run Lens Correction before saving. Finished-JPEG stage: identify/research that HDR and finalize unique metadata. Never restart, copy another photo's metadata, identify people, or cancel unless explicitly asked. Continue until complete.`,
           })
         },
       })
@@ -780,7 +832,7 @@ export default definePlugin({
 
       editor.add({
         name: "apply",
-        description: "Merge the current five frames, apply Camera Raw and Photoshop adjustments, save PSD/JPEG, then return the finished HDR for identification.",
+        description: "Merge five frames, apply Camera Raw/Photoshop/HDR Toning, flatten to 16-bit, run metadata-aware Lens Correction, save PSD/JPEG, and return the finished HDR.",
         options: { namespace: "raw_photo_hdr_processor", codemode: true },
         input: {
           type: "object",

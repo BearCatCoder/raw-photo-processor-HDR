@@ -22,9 +22,11 @@ For each set, the plugin:
 2. Runs Photoshop's installed **Merge to HDR Pro** automation with alignment, automatic best-frame deghosting, 32 Bits/Channel output, and **Complete Toning in Adobe Camera Raw**.
 3. Applies restrained model-selected Camera Raw settings across Light, Color, Effects, Curve, Color Mixer, Color Grading, and Detail.
 4. Applies a conservative Photoshop finishing pass using Brightness/Contrast, Levels, Curves, Exposure, Vibrance, and Hue/Saturation.
-5. Saves the 32 Bits/Channel master as `<source>\PSDs\<first-frame>_HDR.psd`.
-6. Flattens a working copy, changes it to 8 Bits/Channel, and saves `<source>\JPEGs\<first-frame>_HDR.jpg` at JPEG quality 12.
-7. Queues a maximum-1600-pixel rendering of the finished JPEG for identification, then writes matching metadata to the full-resolution PSD and JPEG.
+5. Flattens the image and converts the 32-bit merge to 16 Bits/Channel with model-selected Photoshop HDR Toning settings for a realistic, vibrant, non-washed-out result.
+6. Restores any metadata missing from the merge using the first bracket frame, then applies automatic geometric-distortion, chromatic-aberration, and vignette correction with Photoshop's Lens Correction filter and installed lens profiles.
+7. Saves the flattened 16 Bits/Channel result as `<source>\PSDs\<first-frame>_HDR.psd`.
+8. Changes the working document to 8 Bits/Channel and saves `<source>\JPEGs\<first-frame>_HDR.jpg` at JPEG quality 12.
+9. Queues a maximum-1600-pixel rendering of the finished JPEG for identification, then writes matching metadata to the full-resolution PSD and JPEG.
 
 Existing outputs are skipped unless `overwrite` is enabled. Source RAW files and existing XMP sidecars are not modified.
 
@@ -58,4 +60,4 @@ Compaction defaults to 65% context pressure or eight completed HDRs. Tune it wit
 - Photoshop's installed `Presets/Scripts/Merge To HDR.jsx` and required HDR plug-ins must be available.
 - Supported inputs include ARW, CR2/CR3, DNG, NEF, RAF, ORF, RW2, and other common proprietary RAW formats.
 - Photoshop remains visible during COM automation. Do not interact with it while a batch is running.
-- Very large 32-bit documents may exceed PSD size limits; Photoshop will report the save failure rather than silently changing formats.
+- Lens Correction requires a matching installed Adobe lens profile. The plugin restores missing camera/lens metadata from the first frame before profile matching.
