@@ -389,7 +389,7 @@ function currentPromptText(job: Job, message: string) {
     })
     .join("\n")
   const metadataInstruction = `Use these previews only to choose image adjustments. Identification and metadata must wait until the finished HDR JPEG is saved and returned.`
-  const instruction = `This is one five-shot bracket set. Compare all five attached previews, then call raw_photo_hdr_processor_apply with restrained settings for Camera Raw Light, Color, Effects, Curve, Color Mixer, Color Grading, and Detail, followed by the required Photoshop finish. All five frames will be aligned, deghosted, and merged to a 32-bit HDR.`
+  const instruction = `This is one five-shot bracket set. Compare all five attached previews, then call raw_photo_hdr_processor_apply with jobID and all adjustment fields directly at the top level (there is no edit wrapper). Use restrained settings for Camera Raw Light, Color, Effects, Curve, Color Mixer, Color Grading, and Detail, followed by the required Photoshop finish. All five frames will be aligned, deghosted, and merged to a 32-bit HDR.`
   return `${message}\nJob: ${job.id}\nSequence position ${job.index + 1} of ${job.entries.length}:\n${exposureSummary}\n${instruction}\n${metadataInstruction}`
 }
 
@@ -787,11 +787,11 @@ export default definePlugin({
           additionalProperties: false,
           properties: {
             jobID: { type: "string" },
-            edit: ADJUSTMENT_SCHEMA,
+            ...ADJUSTMENT_SCHEMA.properties,
           },
-          required: ["jobID", "edit"],
+          required: ["jobID", ...ADJUSTMENT_SCHEMA.required],
         },
-        execute: async (input: { jobID: string; edit: Edit }, context) => {
+        execute: async (input: { jobID: string } & Edit, context) => {
           const job = jobs.get(input.jobID)
           if (!job) throw new Error("Unknown or completed RAW processing job.")
           if (job.sessionID !== context.sessionID) throw new Error("This RAW processing job belongs to another session.")
@@ -801,7 +801,7 @@ export default definePlugin({
           const selectedIndex = group.indices[0]
           const entry = job.entries[selectedIndex]
           await context.progress({ status: `Merging five-shot HDR beginning with ${path.basename(entry.raw)} (${selectedIndex + 1}/${job.entries.length})` })
-          await applyEdit(pluginDirectory, group.indices.map((index) => job.entries[index].raw), entry, input.edit, job.overwrite, context.signal)
+          await applyEdit(pluginDirectory, group.indices.map((index) => job.entries[index].raw), entry, input, job.overwrite, context.signal)
           job.pending = { group, selectedIndex }
           // Code Mode can reduce rich tool output to a pathname. Queue the finished
           // JPEG as a real session attachment so the next model turn receives image
