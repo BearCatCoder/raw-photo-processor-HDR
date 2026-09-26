@@ -52,7 +52,7 @@ $env:RAW_PHOTO_PROCESSOR_HDR_MODEL = "openai/gpt-5.6-terra"
 opencode service restart
 ```
 
-Compaction defaults to 65% context pressure or eight completed HDRs. Tune it with `RAW_PHOTO_PROCESSOR_HDR_COMPACT_AT` (0.4–0.9), `RAW_PHOTO_PROCESSOR_HDR_COMPACT_EVERY` (2–50), or equivalent plugin options `compactAt` and `compactEvery`.
+Compaction defaults to 65% context pressure or eight completed HDRs. Tune it with `RAW_PHOTO_PROCESSOR_HDR_COMPACT_AT` (0.4–0.9), `RAW_PHOTO_PROCESSOR_HDR_COMPACT_EVERY` (2–50), or equivalent plugin options `compactAt` and `compactEvery`. If the embedded plugin session API does not expose compaction, the Windows plugin uses the authenticated OpenCode CLI associated with the running app version; set `OPENCODE_CLI` for a nonstandard installation.
 
 ## Requirements and notes
 
